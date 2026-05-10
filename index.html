@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ISBN Metadata Processor</title>
+
+  <!-- =========================================================
+       GOOGLE FONTS
+  ========================================================= -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- =========================================================
+       SHEETJS LIBRARY
+  ========================================================= -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+  <style>
+
+    /* =========================================================
+       ROOT VARIABLES
+    ========================================================= */
+
+    :root {
+      --bg: #070B14;
+      --card: rgba(255,255,255,0.06);
+      --border: rgba(255,255,255,0.12);
+      --cyan: #4DEBFF;
+      --purple: #B155FF;
+      --pink: #FF5DA2;
+      --white: #FFFFFF;
+      --muted: #B8C1D1;
+      --danger: #FF5D5D;
+      --success: #4DFF9A;
+      --warning: #FFD54D;
+      --radius: 22px;
+      --blur: blur(18px);
+      --shadow: 0 0 30px rgba(77,235,255,0.12);
+    }
+
+    /* =========================================================
+       GLOBAL STYLES
+    ========================================================= */
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: radial-gradient(circle at top left, rgba(177,85,255,0.12), transparent 30%),
+                  radial-gradient(circle at bottom right, rgba(77,235,255,0.12), transparent 30%),
+                  var(--bg);
+      color: var(--white);
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+      padding: 20px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1400px;
+      margin: auto;
+    }
+
+    .glass {
+      background: var(--card);
+      border: 1px solid var(--border);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 40px 24px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(120deg,
+      rgba(77,235,255,0.08),
+      rgba(177,85,255,0.08),
+      rgba(255,93,162,0.08));
+      animation: glowMove 10s linear infinite;
+    }
+
+    @keyframes glowMove {
+      0% { transform: translateX(-10%); }
+      50% { transform: translateX(10%); }
+      100% { transform: translateX(-10%); }
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 2;
+      text-align: center;
+    }
+
+    .hero h1 {
+      font-size: clamp(2rem, 7vw, 5rem);
+      font-weight: 800;
+      line-height: 1.1;
+      margin-bottom: 14px;
+      background: linear-gradient(to right, var(--cyan), var(--purple), var(--pink));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero p {
+      color: var(--muted);
+      max-width: 700px;
+      margin: auto;
+      line-height: 1.8;
+    }
+
+    /* =========================================================
+       DROP ZONE
+    ========================================================= */
+
+    .drop-zone {
+      margin-top: 30px;
+      padding: 40px 20px;
+      border-radius: 30px;
+      border: 2px dashed rgba(255,255,255,0.18);
+      transition: 0.3s ease;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .drop-zone:hover,
+    .drop-zone.active {
+      border-color: var(--cyan);
+      transform: translateY(-4px);
+      box-shadow: 0 0 40px rgba(77,235,255,0.2);
+    }
+
+    .drop-zone input {
+      display: none;
+    }
+
+    .drop-zone h2 {
+      margin-bottom: 10px;
+    }
+
+    .drop-zone p {
+      color: var(--muted);
+    }
+
+    .upload-btn {
+      margin-top: 20px;
+      border: none;
+      background: linear-gradient(135deg, var(--cyan), var(--purple));
+      color: white;
+      padding: 14px 24px;
+      border-radius: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: 0.3s ease;
+    }
+
+    .upload-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 30px rgba(177,85,255,0.35);
+    }
+
+    /* =========================================================
+       PROCESSING PANEL
+    ========================================================= */
+
+    .processing-panel {
+      margin-top: 24px;
+      padding: 24px;
+      display: none;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(255,255,255,0.08);
+      margin-top: 16px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--cyan), var(--purple));
+      transition: width 0.25s ease;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 16px;
+      margin-top: 20px;
+    }
+
+    .stat-card {
+      padding: 18px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .stat-card h3 {
+      font-size: 1.8rem;
+      margin-bottom: 6px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    /* =========================================================
+       RESULTS GRID
+    ========================================================= */
+
+    .results-grid {
+      margin-top: 30px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 18px;
+    }
+
+    .book-card {
+      padding: 18px;
+      transition: 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .book-card:hover {
+      transform: translateY(-6px);
+    }
+
+    .book-cover {
+      width: 100%;
+      height: 260px;
+      object-fit: cover;
+      border-radius: 16px;
+      margin-bottom: 14px;
+    }
+
+    .badge-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .badge {
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 700;
+    }
+
+    .success {
+      background: rgba(77,255,154,0.12);
+      color: var(--success);
+    }
+
+    .warning {
+      background: rgba(255,213,77,0.12);
+      color: var(--warning);
+    }
+
+    .danger {
+      background: rgba(255,93,93,0.12);
+      color: var(--danger);
+    }
+
+    /* =========================================================
+       TOASTS
+    ========================================================= */
+
+    .toast-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 999;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .toast {
+      padding: 16px 18px;
+      min-width: 280px;
+      border-radius: 18px;
+      animation: toastIn 0.35s ease;
+    }
+
+    @keyframes toastIn {
+      from {
+        opacity: 0;
+        transform: translateX(30px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    .export-btn {
+      margin-top: 24px;
+      width: 100%;
+      padding: 16px;
+      border: none;
+      border-radius: 18px;
+      background: linear-gradient(90deg, var(--purple), var(--pink));
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    /* =========================================================
+       RESPONSIVE
+    ========================================================= */
+
+    @media(min-width: 768px){
+      body {
+        padding: 40px;
+      }
+
+      .hero {
+        padding: 70px 50px;
+      }
+    }
+
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <!-- =========================================================
+         HERO SECTION
+    ========================================================= -->
+
+    <section class="hero glass">
+      <div class="hero-content">
+        <h1>ISBN Metadata Processor</h1>
+        <p>
+          Futuristic AI-powered workspace for enriching ISBN spreadsheets with high-quality metadata.
+        </p>
+
+        <div class="drop-zone glass" id="dropZone">
+          <input type="file" id="fileInput" accept=".xlsx,.xls" />
+          <h2>Drop Excel File Here</h2>
+          <p>Upload spreadsheets containing ISBN numbers in Column A</p>
+          <button class="upload-btn" id="uploadBtn">Select Excel File</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- =========================================================
+         PROCESSING PANEL
+    ========================================================= -->
+
+    <section class="processing-panel glass" id="processingPanel">
+      <h2 id="statusText">Preparing...</h2>
+
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+
+      <div class="stats">
+        <div class="stat-card">
+          <p class="muted">Total ISBNs</p>
+          <h3 id="totalCount">0</h3>
+        </div>
+
+        <div class="stat-card">
+          <p class="muted">Processed</p>
+          <h3 id="processedCount">0</h3>
+        </div>
+
+        <div class="stat-card">
+          <p class="muted">Failed</p>
+          <h3 id="failedCount">0</h3>
+        </div>
+      </div>
+
+      <button class="export-btn" id="exportBtn">Export Processed Workbook</button>
+    </section>
+
+    <!-- =========================================================
+         RESULTS GRID
+    ========================================================= -->
+
+    <section class="results-grid" id="resultsGrid"></section>
+
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+
+    /* =========================================================
+       GLOBAL STATE
+    ========================================================= */
+
+    const state = {
+      workbook: null,
+      rows: [],
+      processedBooks: [],
+      cancelled: false,
+      cache: new Map(),
+      concurrentRequests: 5,
+      processed: 0,
+      failed: 0
+    };
+
+    /* =========================================================
+       LOCAL STORAGE CACHE LOADING
+    ========================================================= */
+
+    /**
+     * =========================================================
+     * نقوم هنا بتحميل البيانات المحفوظة سابقاً من localStorage
+     * حتى لا نرسل نفس الطلبات إلى Google Books API مرة أخرى.
+     *
+     * هذه العملية تساعد على:
+     * - تسريع التطبيق
+     * - تقليل عدد الطلبات
+     * - تقليل احتمالية Rate Limit
+     * =========================================================
+     */
+
+    const savedCache = JSON.parse(localStorage.getItem('isbn_cache') || '{}');
+
+    Object.entries(savedCache).forEach(([isbn, data]) => {
+      state.cache.set(isbn, data);
+    });
+
+    /* =========================================================
+       DOM REFERENCES
+    ========================================================= */
+
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const dropZone = document.getElementById('dropZone');
+    const processingPanel = document.getElementById('processingPanel');
+    const progressFill = document.getElementById('progressFill');
+    const totalCount = document.getElementById('totalCount');
+    const processedCount = document.getElementById('processedCount');
+    const failedCount = document.getElementById('failedCount');
+    const statusText = document.getElementById('statusText');
+    const resultsGrid = document.getElementById('resultsGrid');
+    const exportBtn = document.getElementById('exportBtn');
+
+    /* =========================================================
+       TOAST SYSTEM
+    ========================================================= */
+
+    /**
+     * =========================================================
+     * اسم الدالة:
+     * showToast
+     *
+     * وظيفة الدالة:
+     * تقوم بإنشاء إشعار صغير يظهر أعلى الصفحة.
+     *
+     * لماذا نستخدمها؟
+     * لإخبار المستخدم بما يحدث داخل التطبيق.
+     *
+     * مثال:
+     * showToast('Upload successful', 'success')
+     * =========================================================
+     */
+
+    function showToast(message, type = 'success') {
+      const toast = document.createElement('div');
+      toast.className = `toast glass ${type}`;
+      toast.innerHTML = `<strong>${message}</strong>`;
+
+      document.getElementById('toastContainer').appendChild(toast);
+
+      setTimeout(() => {
+        toast.remove();
+      }, 4000);
+    }
+
+    /* =========================================================
+       FILE EVENTS
+    ========================================================= */
+
+    uploadBtn.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+      if(file) await processExcelFile(file);
+    });
+
+    dropZone.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      dropZone.classList.add('active');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('active');
+    });
+
+    dropZone.addEventListener('drop', async (event) => {
+      event.preventDefault();
+      dropZone.classList.remove('active');
+
+      const file = event.dataTransfer.files[0];
+
+      if(file) {
+        await processExcelFile(file);
+      }
+    });
+
+    /* =========================================================
+       EXCEL PROCESSING MODULE
+    ========================================================= */
+
+    /**
+     * =========================================================
+     * اسم الدالة:
+     * processExcelFile
+     *
+     * وظيفة الدالة:
+     * تقوم بقراءة ملف Excel وتحويله إلى بيانات يمكن
+     * لجافاسكربت التعامل معها.
+     *
+     * خطوات العمل:
+     * 1- قراءة الملف
+     * 2- تحويله إلى ArrayBuffer
+     * 3- استخدام مكتبة XLSX لتحليل البيانات
+     * 4- استخراج عمود ISBN
+     * 5- بدء معالجة البيانات
+     * =========================================================
+     */
+
+    async function processExcelFile(file) {
+
+      try {
+
+        processingPanel.style.display = 'block';
+        statusText.textContent = 'Reading workbook...';
+
+        const arrayBuffer = await file.arrayBuffer();
+
+        const workbook = XLSX.read(arrayBuffer, {
+          type: 'array'
+        });
+
+        state.workbook = workbook;
+
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+
+        const jsonData = XLSX.utils.sheet_to_json(firstSheet, {
+          header: 1
+        });
+
+        /**
+         * =========================================================
+         * هنا نقوم باستخراج أول عمود فقط.
+         * لأن عمود A يحتوي على ISBN.
+         * =========================================================
+         */
+
+        const isbnRows = jsonData
+          .map(row => row[0])
+          .filter(value => value);
+
+        state.rows = isbnRows;
+
+        totalCount.textContent = isbnRows.length;
+
+        showToast('Excel file loaded successfully');
+
+        await processISBNQueue(isbnRows);
+
+      } catch(error) {
+        console.error(error);
+        showToast('Failed to parse Excel file', 'danger');
+      }
+    }
+
+    /* =========================================================
+       QUEUE PROCESSING SYSTEM
+    ========================================================= */
+
+    /**
+     * =========================================================
+     * اسم الدالة:
+     * processISBNQueue
+     *
+     * وظيفة الدالة:
+     * تقوم بمعالجة أرقام ISBN باستخدام Queue System.
+     *
+     * لماذا لا نستخدم Promise.all ؟
+     * لأن إرسال 1000 طلب دفعة واحدة قد يؤدي إلى:
+     * - انهيار التطبيق
+     * - Rate Limit
+     * - استهلاك كبير للذاكرة
+     *
+     * لذلك نقوم بإرسال عدد محدود من الطلبات
+     * في نفس الوقت.
+     * =========================================================
+     */
+
+    async function processISBNQueue(isbnList) {
+
+      const queue = [...isbnList];
+      const workers = [];
+
+      state.processedBooks = [];
+      state.processed = 0;
+      state.failed = 0;
+
+      for(let i = 0; i < state.concurrentRequests; i++) {
+        workers.push(worker(queue));
+      }
+
+      await Promise.all(workers);
+
+      statusText.textContent = 'Processing complete';
+
+      showToast('Metadata processing completed');
+    }
+
+    /**
+     * =========================================================
+     * اسم الدالة:
+     * worker
+     *
+     * وظيفة الدالة:
+     * كل Worker مسؤول عن تنفيذ الطلبات
+     * بشكل متتالي داخل الـ Queue.
+     * =========================================================
+     */
+
+    async function worker(queue) {
+
+      while(queue.length > 0) {
+
+        const isbn = queue.shift();
+
+        try {
+
+          const book = await fetchBookMetadata(isbn);
+
+          state.processedBooks.push(book);
+
+          renderBookCard(book);
+
+          state.processed++;
+
+        } catch(error) {
+
+          state.failed++;
+
+          state.processedBooks.push({
+            isbn,
+            error: true
+          });
+        }
+
+        updateProgress();
+      }
+    }
+
+    /* =========================================================
+       API MODULE
+    ========================================================= */
+
+    /**
+     * =========================================================
+     * اسم الدالة:
+     * fetchBookMetadata
+     *
+     * وظيفة الدالة:
+     * تقوم بإرسال طلب إلى Google Books API
+     * للحصول على بيانات الكتاب.
+     *
+     * المميزات:
+     * - Cache System
+     * - Retry Logic
+     * - Timeout Protection
+     * - Error Handling
+     * =========================================================
+     */
+
+    async function fetchBookMetadata(isbn, retries = 3) {
+
+      /**
+       * =========================================================
+       * أولاً نقوم بالبحث داخل الـ Cache.
+       * إذا وجدنا البيانات لا داعي لإرسال طلب جديد.
+       * =========================================================
+       */
+
+      if(state.cache.has(isbn)) {
+        return state.cache.get(isbn);
+      }
+
+      const controller = new AbortController();
+
+      const timeout = setTimeout(() => {
+        controller.abort();
+      }, 10000);
+
+      try {
+
+        const response = await fetch(
+          `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`,
+          {
+            signal: controller.signal
+          }
+        );
+
+        clearTimeout(timeout);
+
+        if(!response.ok) {
+          throw new Error('API Error');
+        }
+
+        const data = await response.json();
+
+        if(!data.items || !data.items.length) {
+          return buildInvalidBook(isbn);
+        }
+
+        const volume = data.items[0].volumeInfo;
+
+        const book = {
+          isbn,
+          title: volume.title || 'Unknown Title',
+          authors: (volume.authors || []).join(', '),
+          publisher: volume.publisher || 'Unknown Publisher',
+          publishedDate: volume.publishedDate || '-',
+          pageCount: volume.pageCount || null,
+          language: volume.language || '-',
+          thumbnail: volume.imageLinks?.thumbnail || '',
+          dimensions: volume.dimensions || '-',
+          valid: true
+        };
+
+        /**
+         * =========================================================
+         * نقوم بحفظ البيانات داخل الـ Cache.
+         * =========================================================
+         */
+
+        state.cache.set(isbn, book);
+
+        localStorage.setItem(
+          'isbn_cache',
+          JSON.stringify(Object.fromEntries(state.cache))
+        );
+
+        return book;
+
+      } catch(error) {
+
+        /**
+         * =========================================================
+         * Retry Logic
+         *
+         * إذا فشل الطلب نحاول مرة أخرى
+         * باستخدام Exponential Backoff.
+         * =========================================================
+         */
+
+        if(retries > 0) {
+
+          const delay = (4 - retries) * 1500;
+
+          await sleep(delay);
+
+          return fetchBookMetadata(isbn, retries - 1);
+        }
+
+        return buildInvalidBook(isbn);
+      }
+    }
+
+    /* =========================================================
+       HELPERS
+    ========================================================= */
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function buildInvalidBook(isbn) {
+      return {
+        isbn,
+        title: 'Metadata Not Found',
+        authors: '-',
+        publisher: '-',
+        publishedDate: '-',
+        pageCount: null,
+        language: '-',
+        thumbnail: '',
+        valid: false
+      };
+    }
+
+    /* =========================================================
+       PROGRESS SYSTEM
+    ========================================================= */
+
+    function updateProgress() {
+
+      const total = state.rows.length;
+      const done = state.processed + state.failed;
+
+      const percent = Math.floor((done / total) * 100);
+
+      progressFill.style.width = `${percent}%`;
+
+      processedCount.textContent = state.processed;
+      failedCount.textContent = state.failed;
+
+      statusText.textContent = `Processing ${done} / ${total}`;
+    }
+
+    /* =========================================================
+       RESULTS RENDERING
+    ========================================================= */
+
+    /**
+     * =========================================================
+     * اسم الدالة:
+     * renderBookCard
+     *
+     * وظيفة الدالة:
+     * تقوم بعرض بطاقة الكتاب داخل الواجهة.
+     * =========================================================
+     */
+
+    function renderBookCard(book) {
+
+      const card = document.createElement('div');
+
+      card.className = 'book-card glass';
+
+      card.innerHTML = `
+        <img
+          class="book-cover"
+          src="${book.thumbnail || 'https://placehold.co/400x600/111827/FFFFFF?text=No+Cover'}"
+          alt="Book Cover"
+        />
+
+        <h3>${book.title}</h3>
+
+        <p class="muted">${book.authors}</p>
+
+        <p style="margin-top:8px">${book.publisher}</p>
+
+        <div class="badge-row">
+          <div class="badge ${book.valid ? 'success' : 'danger'}">
+            ${book.valid ? 'Valid' : 'Invalid'}
+          </div>
+
+          ${!book.pageCount ? `
+            <div class="badge warning">
+              Missing Pages
+            </div>
+          ` : ''}
+        </div>
+      `;
+
+      resultsGrid.appendChild(card);
+    }
+
+    /* =========================================================
+       EXPORT SYSTEM
+    ========================================================= */
+
+    /**
+     * =========================================================
+     * اسم الدالة:
+     * exportWorkbook
+     *
+     * وظيفة الدالة:
+     * تقوم بإنشاء ملف Excel جديد يحتوي
+     * على البيانات المعالجة.
+     * =========================================================
+     */
+
+    exportBtn.addEventListener('click', exportWorkbook);
+
+    function exportWorkbook() {
+
+      const rows = state.processedBooks.map(book => ({
+        ISBN: book.isbn,
+        Title: book.title,
+        Authors: book.authors,
+        Publisher: book.publisher,
+        PublishedDate: book.publishedDate,
+        PageCount: book.pageCount,
+        Language: book.language,
+        Validation: book.valid ? 'Valid' : 'Invalid'
+      }));
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+
+      const workbook = XLSX.utils.book_new();
+
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Processed Books');
+
+      XLSX.writeFile(workbook, 'processed_books.xlsx');
+
+      showToast('Workbook exported successfully');
+    }
+
+    /* =========================================================
+       ACCESSIBILITY HELPERS
+    ========================================================= */
+
+    document.addEventListener('keydown', (event) => {
+      if(event.key === 'Enter') {
+        dropZone.click();
+      }
+    });
+
+    /* =========================================================
+       FUTURE SCALABILITY NOTES
+    ========================================================= */
+
+    /**
+     * =========================================================
+     * يمكن مستقبلاً إضافة:
+     *
+     * - Authentication System
+     * - Multiple Metadata APIs
+     * - OCR ISBN Scanner
+     * - AI Categorization
+     * - Dark / Light Mode
+     * - Cloud Storage
+     * - SaaS Subscription System
+     * =========================================================
+     */
+
+  </script>
+</body>
+</html>
+
+<!-- =========================================================
+README.md
+========================================================= -->
+
+<!--
+# ISBN Metadata Processor
+
+A futuristic AI-powered metadata enrichment workspace for ISBN spreadsheets.
+
+## Features
+
+- Excel upload system
+- Google Books API integration
+- Queue-based request processing
+- Retry + exponential backoff
+- Smart caching system
+- Validation engine
+- Glassmorphism UI
+- Mobile-first design
+- XLSX export
+- GitHub Pages compatible
+
+## Tech Stack
+
+- HTML5
+- CSS3
+- Vanilla JavaScript
+- SheetJS
+
+## Deployment
+
+1. Upload index.html to GitHub repository.
+2. Enable GitHub Pages.
+3. Open deployed URL.
+
+## Future Upgrades
+
+- OCR ISBN scanning
+- AI categorization
+- SaaS authentication
+- Multi-provider metadata APIs
+- Team collaboration
+
+## License
+
+MIT
+-->
