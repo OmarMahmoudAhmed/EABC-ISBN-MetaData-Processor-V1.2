@@ -1361,14 +1361,14 @@ body {
     <!-- File Info Card -->
     <div class="file-info-card" id="fileInfoCard">
       <div class="file-info-inner">
-        <div class="file-icon-badge">📊</div>
+        <div class="file-icon-badge"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-table2-icon lucide-table-2"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/></svg></div>
         <div class="file-details">
           <div class="file-name" id="fileName">—</div>
           <div class="file-meta" id="fileMeta">—</div>
         </div>
         <div class="file-actions">
           <button class="btn btn-primary" id="processBtn" onclick="startProcessing()">
-            🚀 بدء المعالجة
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-cpu-icon lucide-cpu"><path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/></svg> بدء المعالجة
           </button>
           <button class="btn btn-secondary" onclick="resetAll()">✕</button>
         </div>
@@ -1450,35 +1450,35 @@ body {
     <!-- Controls Row -->
     <div class="controls-row" id="controlsRow">
       <button class="btn btn-success" id="exportBtn" onclick="exportResults()" disabled>
-        📥 تصدير Excel
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-cpu-icon lucide-cpu"><path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/></svg> تصدير Excel
       </button>
       <button class="btn btn-secondary" onclick="resetAll()">
-        🔄 بدء من جديد
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-rotate-ccw-icon lucide-rotate-ccw"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> بدء من جديد
       </button>
       <button class="btn btn-secondary" id="stopBtn" onclick="stopProcessing()" style="display:none;">
-        ⏹ إيقاف
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-pause-icon lucide-circle-pause"><circle cx="12" cy="12" r="10"/><line x1="10" x2="10" y1="15" y2="9"/><line x1="14" x2="14" y1="15" y2="9"/></svg> إيقاف
       </button>
     </div>
 
     <!-- Summary Grid -->
     <div class="summary-grid" id="summaryGrid">
       <div class="summary-card">
-        <div class="summary-icon">📚</div>
+        <div class="summary-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-rows4-icon lucide-rows-4"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M21 7.5H3"/><path d="M21 12H3"/><path d="M21 16.5H3"/></svg></div>
         <div class="summary-value cyan" id="sumTotal">0</div>
         <div class="summary-label">إجمالي ISBNs</div>
       </div>
       <div class="summary-card">
-        <div class="summary-icon">✅</div>
+        <div class="summary-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-check-icon lucide-search-check"><path d="m8 11 2 2 4-4"/><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></div>
         <div class="summary-value green" id="sumSuccess">0</div>
         <div class="summary-label">تم جلبها</div>
       </div>
       <div class="summary-card">
-        <div class="summary-icon">❌</div>
+        <div class="summary-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-x-icon lucide-circle-x"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg></div>
         <div class="summary-value pink" id="sumFailed">0</div>
         <div class="summary-label">فشلت</div>
       </div>
       <div class="summary-card">
-        <div class="summary-icon">⚠️</div>
+        <div class="summary-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-alert-icon lucide-circle-alert"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg></div>
         <div class="summary-value" style="color:var(--yellow)" id="sumWarning">0</div>
         <div class="summary-label">تحذيرات</div>
       </div>
@@ -1525,10 +1525,10 @@ body {
 
 <script>
 /* =========================================================
-   ISBN METADATA PROCESSOR v1.0
+   ISBN METADATA PROCESSOR v1.2
    محرك معالجة بيانات ISBN بواجهة مستخدم متطورة
    
-   المطور: AI Assistant
+   المطور: Omar Mahmoud
    اللغة: Vanilla JavaScript
    التبعيات: SheetJS (xlsx)
 ========================================================= */
