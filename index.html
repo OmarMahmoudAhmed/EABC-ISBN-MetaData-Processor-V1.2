@@ -1553,7 +1553,10 @@ let activeRequests = 0;
 // المصدر الوحيد الآن هو Open Library، وطلباته كلها بتتصفّ عبر بوابة واحدة
 // بمعدل طلب/ثانية تقريباً (انظر أسفل)، فالعمّال هنا بيسهلوا بس إدارة الطابور
 // ومعالجة التحقق/التكرار بالتوازي — السرعة الفعلية للشبكة محكومة بالبوابة.
-const MAX_CONCURRENT = 6;
+const MAX_CONCURRENT = 6; // لم تعد تُستخدم للتحكم في التوازي الشبكي (راجع BATCH_SIZE بدلاً منها)
+
+// عدد أكواد ISBN التي تُجمع في طلب HTTP واحد (batch) بدل طلب منفصل لكل كتاب
+const BATCH_SIZE = 25;
 
 // مؤشر يحدد إذا كانت المعالجة شغّالة
 let isProcessing = false;
@@ -1826,68 +1829,88 @@ function validateISBN(isbn) {
 ========================================================= */
 
 /**
- * fetchFromOpenLibrary — يجلب بيانات كتاب من Open Library (بدون مفتاح API)
- * @param {string} isbn
- * @returns {Promise<Object>} بيانات الكتاب
+ * mapOpenLibraryInfo — يحوّل عنصر بيانات خام من Open Library لصيغة موحّدة
+ * @param {Object} info - كائن البيانات الخام لكتاب واحد من استجابة API
+ * @returns {Object} بيانات الكتاب بالصيغة الموحدة المستخدمة في الواجهة
  */
-async function fetchFromOpenLibrary(isbn) {
+function mapOpenLibraryInfo(info) {
+  return {
+    found: true,
+    title: info.title || 'غير متوفر',
+    authors: (info.authors || []).map(a => a.name).join('، ') || 'غير متوفر',
+    publisher: (info.publishers || []).map(p => p.name).join('، ') || 'غير متوفر',
+    publishedDate: info.publish_date || 'غير متوفر',
+    pageCount: info.number_of_pages || null,
+    language: 'غير متوفر', // غير متاحة عادةً في هذه النقطة من Open Library
+    thumbnail: info.cover?.medium || info.cover?.large || info.cover?.small || null,
+    categories: (info.subjects || []).map(s => s.name).join('، '),
+    dimensions: null,
+    source: 'Open Library',
+  };
+}
+
+/**
+ * fetchBatchFromOpenLibrary — يجلب بيانات عدة كتب دفعة واحدة عبر طلب HTTP واحد
+ * (بدل طلب منفصل لكل ISBN)، وذلك عن طريق تمرير عدة bibkeys مفصولة بفاصلة.
+ * هذا هو المصدر الحقيقي للتسريع: تقليل عدد الطلبات نفسها بدل زيادة عددها بالتوازي.
+ * @param {string[]} isbnBatch - مجموعة أكواد ISBN (بحد أقصى BATCH_SIZE)
+ * @returns {Promise<Object>} خريطة isbn → نتيجة (بدون خاصية isbn نفسها)
+ */
+async function fetchBatchFromOpenLibrary(isbnBatch) {
+  // بوابة تنظيم الطلبات ما زالت مفعّلة، لكنها الآن تُطبَّق على مستوى
+  // "الدفعة" بأكملها وليس على كل ISBN منفرد — فطلب واحد كل ~1.05 ثانية
+  // يجلب الآن BATCH_SIZE كتاب بدل كتاب واحد فقط.
   await scheduleOpenLibraryRequest();
 
-  const url = `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`;
+  const bibkeys = isbnBatch.map(isbn => `ISBN:${isbn}`).join(',');
+  const url = `https://openlibrary.org/api/books?bibkeys=${bibkeys}&format=json&jscmd=data`;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  const outcomes = {};
 
   try {
     const response = await fetch(url, { signal: controller.signal });
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      return { found: false, reason: `HTTP ${response.status}`, status: response.status };
+      // فشل الطلب بالكامل — كل أكواد الدفعة تُعتبر غير موجودة لهذه المحاولة
+      isbnBatch.forEach(isbn => {
+        outcomes[isbn] = { found: false, reason: `HTTP ${response.status}`, status: response.status };
+      });
+      return outcomes;
     }
 
     const data = await response.json();
-    const info = data[`ISBN:${isbn}`];
 
-    if (!info) {
-      return { found: false, reason: 'لم يُعثر على الكتاب في Open Library' };
-    }
+    isbnBatch.forEach(isbn => {
+      const info = data[`ISBN:${isbn}`];
+      outcomes[isbn] = info
+        ? mapOpenLibraryInfo(info)
+        : { found: false, reason: 'لم يُعثر على الكتاب في Open Library' };
+    });
 
-    return {
-      found: true,
-      title: info.title || 'غير متوفر',
-      authors: (info.authors || []).map(a => a.name).join('، ') || 'غير متوفر',
-      publisher: (info.publishers || []).map(p => p.name).join('، ') || 'غير متوفر',
-      publishedDate: info.publish_date || 'غير متوفر',
-      pageCount: info.number_of_pages || null,
-      language: 'غير متوفر', // غير متاحة عادةً في هذه النقطة من Open Library
-      thumbnail: info.cover?.medium || info.cover?.large || info.cover?.small || null,
-      categories: (info.subjects || []).map(s => s.name).join('، '),
-      dimensions: null,
-      source: 'Open Library',
-    };
+    return outcomes;
   } catch (err) {
     clearTimeout(timeoutId);
-    return { found: false, reason: err.name === 'AbortError' ? 'انتهت مهلة الطلب' : (err.message || 'فشل الطلب') };
+    const reason = err.name === 'AbortError' ? 'انتهت مهلة الطلب' : (err.message || 'فشل الطلب');
+    isbnBatch.forEach(isbn => { outcomes[isbn] = { found: false, reason }; });
+    return outcomes;
   }
 }
 
 /**
- * fetchBookMetadata — يجلب بيانات كتاب من المصدر الوحيد المعتمد (Open Library)
- * @param {string} isbn - كود ISBN
- * @returns {Promise<Object>} - بيانات الكتاب
+ * chunkArray — يقسم مصفوفة إلى دفعات (chunks) بحجم ثابت
+ * @param {Array} arr - المصفوفة الأصلية
+ * @param {number} size - حجم كل دفعة
+ * @returns {Array[]} مصفوفة من الدفعات
  */
-async function fetchBookMetadata(isbn) {
-  // تحقق من الكاش أولاً قبل أي طلب شبكة
-  if (cache.has(isbn)) {
-    addActivity(`📦 كاش: ${isbn}`, 'info');
-    return cache.get(isbn);
+function chunkArray(arr, size) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
   }
-
-  const outcome = await fetchFromOpenLibrary(isbn);
-
-  const result = { isbn, ...outcome };
-  cache.set(isbn, result);
-  return result;
+  return chunks;
 }
 
 /**
@@ -1905,94 +1928,92 @@ function sleep(ms) {
 
 /**
  * processQueue — المعالج الرئيسي للطابور
- * يشغّل الطلبات بشكل متوازٍ مع التحكم في العدد الأقصى
+ * يمر أولاً على كل ISBN محلياً (تحقق + تكرار + كاش) بدون أي طلب شبكة،
+ * ثم يجلب الباقي دفعات (batches) عبر Open Library — كل دفعة = طلب HTTP واحد
+ * يحمل حتى BATCH_SIZE كتاب، بدل طلب منفصل لكل كتاب.
  * @param {string[]} isbns - قائمة أكواد ISBN
  */
 async function processQueue(isbns) {
   const total = isbns.length;
   let processed = 0;
-  let index = 0;
+  const seen = new Set();
+  const toFetch = []; // { index, isbn } — العناصر التي تحتاج فعلاً طلب شبكة
 
-  // ابدأ المعالجة المتوازية
-  // أنشئ عمال متوازيين بعدد MAX_CONCURRENT
-  const workers = [];
+  // المرحلة 1: تحقق من الصحة + التكرار + الكاش — كلها محلية وفورية
+  isbns.forEach((isbn, index) => {
+    const validation = validateISBN(isbn);
+    if (!validation.valid) {
+      results[index] = { isbn, found: false, reason: validation.reason, validationError: true };
+      failedCount++;
+      processed++;
+      addActivity(`❌ ISBN غير صالح: ${isbn} — ${validation.reason}`, 'error');
+      updateResultCard(index, results[index]);
+      return;
+    }
 
-  for (let w = 0; w < Math.min(MAX_CONCURRENT, total); w++) {
-    workers.push(processWorker());
-  }
+    if (seen.has(isbn)) {
+      results[index] = { isbn, found: false, reason: 'كود ISBN مكرر', duplicate: true };
+      failedCount++;
+      processed++;
+      addActivity(`⚠️ مكرر: ${isbn}`, 'warn');
+      updateResultCard(index, results[index]);
+      return;
+    }
+    seen.add(isbn);
 
-  // دالة العامل — تعمل بشكل مستقل وتأخذ من الطابور
-  async function processWorker() {
-    // كل عامل يكمل الطلبات واحداً واحداً
-    while (index < total && !shouldStop) {
-      // احجز العنصر الحالي من الطابور
-      const currentIndex = index++;
-      const isbn = isbns[currentIndex];
+    if (cache.has(isbn)) {
+      const cached = cache.get(isbn);
+      results[index] = cached;
+      cached.found ? successCount++ : failedCount++;
+      processed++;
+      addActivity(`📦 كاش: ${isbn}`, 'info');
+      updateResultCard(index, cached);
+      return;
+    }
 
-      // تحقق من صحة الكود
-      const validation = validateISBN(isbn);
-      if (!validation.valid) {
-        results[currentIndex] = {
-          isbn,
-          found: false,
-          reason: validation.reason,
-          validationError: true
-        };
+    toFetch.push({ index, isbn });
+  });
+
+  updateProgress(processed, total);
+
+  // المرحلة 2: اجلب الباقي من الشبكة على دفعات
+  const batches = chunkArray(toFetch, BATCH_SIZE);
+
+  for (const batch of batches) {
+    if (shouldStop) break;
+
+    const batchIsbns = batch.map(item => item.isbn);
+    setStatus(`جاري جلب دفعة (${batchIsbns.length} كتاب) في طلب واحد...`);
+    addActivity(`📚 إرسال دفعة: ${batchIsbns.length} ISBN في طلب HTTP واحد`, 'info');
+
+    let outcomes;
+    try {
+      outcomes = await fetchBatchFromOpenLibrary(batchIsbns);
+    } catch (err) {
+      // احتياط: لو حصل خطأ غير متوقع، لا تُسقط الدفعة كلها بصمت
+      outcomes = {};
+      batchIsbns.forEach(isbn => { outcomes[isbn] = { found: false, reason: err.message }; });
+    }
+
+    batch.forEach(({ index, isbn }) => {
+      const data = { isbn, ...outcomes[isbn] };
+      cache.set(isbn, data);
+      results[index] = data;
+
+      if (data.found) {
+        successCount++;
+        addActivity(`✅ ${data.title?.substring(0, 40)} — ${isbn}`, 'success');
+      } else {
         failedCount++;
-        processed++;
-        updateProgress(processed, total);
-        addActivity(`❌ ISBN غير صالح: ${isbn} — ${validation.reason}`, 'error');
-        updateResultCard(currentIndex, results[currentIndex]);
-        continue;
-      }
-
-      // تحقق من تكرار ISBN (في نفس الدفعة)
-      const isDuplicate = isbns.slice(0, currentIndex).includes(isbn);
-      if (isDuplicate) {
-        results[currentIndex] = {
-          isbn,
-          found: false,
-          reason: 'كود ISBN مكرر',
-          duplicate: true
-        };
-        failedCount++;
-        processed++;
-        updateProgress(processed, total);
-        addActivity(`⚠️ مكرر: ${isbn}`, 'warn');
-        updateResultCard(currentIndex, results[currentIndex]);
-        continue;
-      }
-
-      // حدّث رسالة الحالة
-      setStatus(`جاري معالجة: ${isbn}`);
-      addActivity(`🔍 جلب بيانات: ${isbn}`, 'info');
-
-      try {
-        // اجلب البيانات من API
-        const data = await fetchBookMetadata(isbn);
-        results[currentIndex] = data;
-
-        if (data.found) {
-          successCount++;
-          addActivity(`✅ ${data.title?.substring(0, 40)} — ${isbn}`, 'success');
-        } else {
-          failedCount++;
-          addActivity(`❌ لم يُعثر على: ${isbn} — ${data.reason}`, 'error');
-        }
-      } catch (err) {
-        results[currentIndex] = { isbn, found: false, reason: err.message };
-        failedCount++;
-        addActivity(`💥 خطأ: ${isbn}`, 'error');
+        addActivity(`❌ لم يُعثر على: ${isbn} — ${data.reason}`, 'error');
       }
 
       processed++;
-      updateProgress(processed, total);
-      updateResultCard(currentIndex, results[currentIndex]);
-    }
-  }
+      updateResultCard(index, data);
+    });
 
-  // انتظر حتى يكمل جميع العمال عملهم
-  await Promise.all(workers);
+    updateProgress(processed, total);
+  }
 }
 
 /* =========================================================
