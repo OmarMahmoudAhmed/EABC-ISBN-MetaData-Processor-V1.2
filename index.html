@@ -1971,6 +1971,39 @@ async function fetchFromGoogleBooks(isbn) {
 }
 
 /**
+ * fetchDescriptionFromGoogleBooks — طلب مُصغّر يجلب "الوصف" فقط من Google
+ * Books. يُستخدم فقط كتعزيز (enrichment) لما يكون المصدر الأساسي للكتاب
+ * هو Open Library ونجح، لكن Open Library مبيرجعش وصف الكتاب أصلاً.
+ * يمرّ عبر نفس بوابة تنظيم طلبات Google Books فيحترم نفس حد المعدّل.
+ * لو فشل أو ملقاش وصف، بيرجّع null بهدوء من غير ما يوقف باقي المعالجة.
+ * @param {string} isbn
+ * @returns {Promise<string|null>}
+ */
+async function fetchDescriptionFromGoogleBooks(isbn) {
+  await scheduleGoogleRequest();
+
+  const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&maxResults=1`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    if (!data.items || data.items.length === 0) return null;
+
+    const info = data.items[0].volumeInfo;
+    return truncateDescription(info.description, 100);
+  } catch (err) {
+    clearTimeout(timeoutId);
+    return null;
+  }
+}
+
+/**
  * fetchBookMetadata — يجلب بيانات كتاب موزّعاً بين مصدرين (Open Library و Google
  * Books) بالتبادل حسب ترتيب الكتاب، مع تجربة سريعة للمصدر البديل عند الفشل
  * (بدون انتظار طويل أو إعادة محاولات متكررة) — أولوية للسرعة على حساب الدقة.
@@ -2002,6 +2035,16 @@ async function fetchBookMetadata(isbn, index = 0) {
     outcome = fallbackOutcome.found
       ? fallbackOutcome
       : { found: false, reason: fallbackOutcome.reason || outcome.reason || 'فشل الطلب من كلا المصدرين' };
+  }
+
+  // تعزيز الوصف: لو الكتاب اتلقى بنجاح لكن مفيش وصف مرفق معاه (غالباً لأن
+  // المصدر كان Open Library، اللي مبيرجعش وصف أصلاً)، نجرب نجيب الوصف فقط
+  // من Google Books كطلب إضافي خفيف. لو مفيش وصف هناك برضه، يفضل فارغ.
+  if (outcome.found && !outcome.description) {
+    const enrichedDescription = await fetchDescriptionFromGoogleBooks(isbn);
+    if (enrichedDescription) {
+      outcome = { ...outcome, description: enrichedDescription };
+    }
   }
 
   const result = { isbn, ...outcome };
