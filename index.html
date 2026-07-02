@@ -1549,14 +1549,66 @@ let results = [];
 // عداد الطلبات النشطة حالياً
 let activeRequests = 0;
 
-// الحد الأقصى للطلبات المتوازية - أفضل أداء
-const MAX_CONCURRENT = 5;
+// الحد الأقصى للطلبات المتوازية (عمّال منطقيون)
+// بما إن كل مصدر بيانات (Open Library / Google Books) عنده "بوابة" سرعة خاصة به الآن،
+// رفعنا العدد هنا لتحسين سرعة المعالجة الظاهرة، من غير ما ده يفجّر أي حد فعلي —
+// لأن السرعة الحقيقية للطلبات محكومة بالبوابتين تحت، مش بعدد العمّال.
+const MAX_CONCURRENT = 6;
 
 // مؤشر يحدد إذا كانت المعالجة شغّالة
 let isProcessing = false;
 
 // مؤشر الإيقاف
 let shouldStop = false;
+
+/* ---------------------------------------------------------
+   استراتيجية المصدرين المتوازيين — Dual-Source Strategy
+   بدل الاعتماد على مصدر واحد بحد غير موثّق (Google Books بدون
+   مفتاح)، بنوزّع الأكواد بين مصدرين مستقلّين يشتغلوا في نفس
+   الوقت، كل واحد له "بوابة" سرعة خاصة به مبنية على حده الحقيقي:
+
+   - Open Library: حد موثّق رسمياً = طلب واحد/ثانية بدون مفتاح
+     (المتصفح مايقدرش يبعت User-Agent مخصص يرفع الحد لـ 3x).
+   - Google Books: حصته غير موثقة ومشتركة، فبنفضل نتعامل معاها
+     بحذر (تباعد 400ms) بدون الاعتماد عليها الاعتماد الكلي.
+
+   كل ISBN بيتوجّه لمصدر "أساسي" حسب ترتيبه (بالتبادل)، ولو فشل
+   المصدر الأساسي، بنجرب المصدر التاني مرة واحدة بسرعة (بدون
+   انتظار طويل) بدل الاستسلام فوراً — كده بنغطي أكبر عدد ممكن من
+   الكتب في أقل وقت ممكن.
+--------------------------------------------------------- */
+
+// --- بوابة Open Library (طلب واحد كل ثانية تقريباً) ---
+let olRequestChain = Promise.resolve();
+let lastOLRequestTimestamp = 0;
+const OL_MIN_GAP_MS = 1050; // هامش أمان بسيط فوق الحد الرسمي (1000ms)
+
+function scheduleOpenLibraryRequest() {
+  const myTurn = olRequestChain.then(async () => {
+    const now = Date.now();
+    const wait = Math.max(0, lastOLRequestTimestamp + OL_MIN_GAP_MS - now);
+    if (wait > 0) await sleep(wait);
+    lastOLRequestTimestamp = Date.now();
+  });
+  olRequestChain = myTurn.catch(() => {});
+  return myTurn;
+}
+
+// --- بوابة Google Books (تباعد أقصر، حصة غير موثقة) ---
+let googleRequestChain = Promise.resolve();
+let lastGoogleRequestTimestamp = 0;
+const GOOGLE_MIN_GAP_MS = 400;
+
+function scheduleGoogleRequest() {
+  const myTurn = googleRequestChain.then(async () => {
+    const now = Date.now();
+    const wait = Math.max(0, lastGoogleRequestTimestamp + GOOGLE_MIN_GAP_MS - now);
+    if (wait > 0) await sleep(wait);
+    lastGoogleRequestTimestamp = Date.now();
+  });
+  googleRequestChain = myTurn.catch(() => {});
+  return myTurn;
+}
 
 // عداد الطلبات الناجحة
 let successCount = 0;
@@ -1800,85 +1852,161 @@ function validateISBN(isbn) {
 ========================================================= */
 
 /**
- * fetchBookMetadata — يجلب بيانات كتاب من Google Books API
+ * truncateDescription — يختصر نص وصف الكتاب إلى حد أقصى من الكلمات
+ * (وليس عدد الأحرف)، ويضيف "..." في النهاية فقط إذا تم الاقتصاص فعلاً
+ * @param {string} text - نص الوصف الأصلي القادم من Google Books
+ * @param {number} maxWords - أقصى عدد كلمات مسموح به (افتراضياً 100)
+ * @returns {string|null} النص بعد التنظيف والاقتصاص، أو null لو لا يوجد وصف
+ */
+function truncateDescription(text, maxWords = 100) {
+  if (!text) return null;
+
+  // Google Books أحياناً يرجّع وسوم HTML بسيطة (<p>, <b>, <i>...) داخل الوصف — نزيلها
+  const clean = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!clean) return null;
+
+  const words = clean.split(' ');
+  if (words.length <= maxWords) return clean;
+
+  return words.slice(0, maxWords).join(' ') + '...';
+}
+
+/**
+ * fetchFromOpenLibrary — يجلب بيانات كتاب من Open Library (بدون مفتاح API)
+ * طلب واحد فقط لكل كتاب (بدون طلب ثانٍ لجلب الوصف، للحفاظ على السرعة)
+ * @param {string} isbn
+ * @returns {Promise<Object>} نتيجة موحّدة الشكل مع fetchFromGoogleBooks
+ */
+async function fetchFromOpenLibrary(isbn) {
+  await scheduleOpenLibraryRequest();
+
+  const url = `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return { found: false, reason: `HTTP ${response.status}`, status: response.status };
+    }
+
+    const data = await response.json();
+    const info = data[`ISBN:${isbn}`];
+
+    if (!info) {
+      return { found: false, reason: 'لم يُعثر على الكتاب في Open Library' };
+    }
+
+    return {
+      found: true,
+      title: info.title || 'غير متوفر',
+      authors: (info.authors || []).map(a => a.name).join('، ') || 'غير متوفر',
+      publisher: (info.publishers || []).map(p => p.name).join('، ') || 'غير متوفر',
+      publishedDate: info.publish_date || 'غير متوفر',
+      pageCount: info.number_of_pages || null,
+      language: 'غير متوفر', // غير متاحة عادةً في هذه النقطة من Open Library
+      thumbnail: info.cover?.medium || info.cover?.large || info.cover?.small || null,
+      categories: (info.subjects || []).map(s => s.name).join('، '),
+      // Open Library بيحتاج طلب إضافي منفصل (work-level) لجلب الوصف —
+      // بنتجاهله عمداً هنا للحفاظ على السرعة، وبنعتمد على Google Books
+      // كمصدر بديل لو احتجنا وصف ومفيش عند Open Library
+      description: null,
+      dimensions: null,
+      source: 'Open Library',
+    };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    return { found: false, reason: err.name === 'AbortError' ? 'انتهت مهلة الطلب' : (err.message || 'فشل الطلب') };
+  }
+}
+
+/**
+ * fetchFromGoogleBooks — يجلب بيانات كتاب من Google Books API (بدون مفتاح)
+ * @param {string} isbn
+ * @returns {Promise<Object>} نتيجة موحّدة الشكل مع fetchFromOpenLibrary
+ */
+async function fetchFromGoogleBooks(isbn) {
+  await scheduleGoogleRequest();
+
+  const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&maxResults=1`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return { found: false, reason: `HTTP ${response.status}`, status: response.status };
+    }
+
+    const data = await response.json();
+
+    if (!data.items || data.items.length === 0) {
+      return { found: false, reason: 'لم يُعثر على الكتاب في Google Books' };
+    }
+
+    const info = data.items[0].volumeInfo;
+
+    return {
+      found: true,
+      title: info.title || 'غير متوفر',
+      authors: (info.authors || []).join('، '),
+      publisher: info.publisher || 'غير متوفر',
+      publishedDate: info.publishedDate || 'غير متوفر',
+      pageCount: info.pageCount || null,
+      language: info.language || 'غير متوفر',
+      thumbnail: info.imageLinks?.thumbnail?.replace('http:', 'https:') || null,
+      categories: (info.categories || []).join('، '),
+      description: truncateDescription(info.description, 100),
+      dimensions: info.dimensions ? `${info.dimensions.height || '?'} × ${info.dimensions.width || '?'}` : null,
+      source: 'Google Books',
+    };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    return { found: false, reason: err.name === 'AbortError' ? 'انتهت مهلة الطلب' : (err.message || 'فشل الطلب') };
+  }
+}
+
+/**
+ * fetchBookMetadata — يجلب بيانات كتاب موزّعاً بين مصدرين (Open Library و Google
+ * Books) بالتبادل حسب ترتيب الكتاب، مع تجربة سريعة للمصدر البديل عند الفشل
+ * (بدون انتظار طويل أو إعادة محاولات متكررة) — أولوية للسرعة على حساب الدقة.
  * @param {string} isbn - كود ISBN
- * @param {number} retries - عدد محاولات إعادة المحاولة المتبقية
+ * @param {number} index - ترتيب الكتاب في القائمة، يُستخدم لتوزيع الحمل بالتبادل
  * @returns {Promise<Object>} - بيانات الكتاب
  */
-async function fetchBookMetadata(isbn, retries = 3) {
+async function fetchBookMetadata(isbn, index = 0) {
   // تحقق من الكاش أولاً قبل أي طلب شبكة
   if (cache.has(isbn)) {
     addActivity(`📦 كاش: ${isbn}`, 'info');
     return cache.get(isbn);
   }
 
-  // بنائل رابط API
-  const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&maxResults=1`;
+  // وزّع الحمل بالتبادل: الأرقام الزوجية تبدأ بـ Open Library، والفردية بـ Google Books
+  const primaryIsOpenLibrary = (index % 2 === 0);
+  const primaryFn = primaryIsOpenLibrary ? fetchFromOpenLibrary : fetchFromGoogleBooks;
+  const fallbackFn = primaryIsOpenLibrary ? fetchFromGoogleBooks : fetchFromOpenLibrary;
+  const primaryName = primaryIsOpenLibrary ? 'Open Library' : 'Google Books';
+  const fallbackName = primaryIsOpenLibrary ? 'Google Books' : 'Open Library';
 
-  // حاول الطلب مع إعادة المحاولة عند الفشل
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      // AbortController يسمح بإلغاء الطلب إذا طال الوقت (timeout)
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 ثانية
+  let outcome = await primaryFn(isbn);
 
-      const response = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
-
-      // تحقق من نجاح الاستجابة
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      // تحقق إذا كان API رجّع نتائج
-      if (!data.items || data.items.length === 0) {
-        const result = { isbn, found: false, reason: 'لم يُعثر على الكتاب في Google Books' };
-        cache.set(isbn, result);
-        return result;
-      }
-
-      // استخرج المعلومات من أول نتيجة
-      const info = data.items[0].volumeInfo;
-
-      // بناء كائن البيانات المنظّمة
-      const result = {
-        isbn,
-        found: true,
-        title: info.title || 'غير متوفر',
-        authors: (info.authors || []).join('، '),
-        publisher: info.publisher || 'غير متوفر',
-        publishedDate: info.publishedDate || 'غير متوفر',
-        pageCount: info.pageCount || null,
-        language: info.language || 'غير متوفر',
-        thumbnail: info.imageLinks?.thumbnail?.replace('http:', 'https:') || null,
-        categories: (info.categories || []).join('، '),
-        description: info.description ? info.description.substring(0, 200) + '...' : null,
-        dimensions: info.dimensions ? `${info.dimensions.height || '?'} × ${info.dimensions.width || '?'}` : null,
-      };
-
-      // خزّن في الكاش
-      cache.set(isbn, result);
-      return result;
-
-    } catch (err) {
-      // إذا فاق الوقت المحدد أو حصل خطأ
-      const isLast = attempt === retries;
-
-      if (!isLast) {
-        // انتظر قبل إعادة المحاولة (Exponential Backoff)
-        const delay = Math.pow(2, attempt) * 500; // 1s, 2s, 4s...
-        addActivity(`⏳ إعادة محاولة ISBN ${isbn} (${attempt}/${retries})`, 'warn');
-        await sleep(delay);
-      } else {
-        // فشلت كل المحاولات
-        const result = { isbn, found: false, reason: err.message || 'فشل الطلب' };
-        cache.set(isbn, result);
-        return result;
-      }
-    }
+  // لو المصدر الأساسي فشل (مش موجود، أو 429، أو أي خطأ) نجرب المصدر التاني
+  // مرة واحدة فقط وبسرعة — بدون انتظار تصاعدي طويل، لأن الأولوية للسرعة
+  if (!outcome.found) {
+    addActivity(`↪️ ${isbn} — ${primaryName} لم يفلح، تجربة ${fallbackName}`, 'warn');
+    const fallbackOutcome = await fallbackFn(isbn);
+    outcome = fallbackOutcome.found
+      ? fallbackOutcome
+      : { found: false, reason: fallbackOutcome.reason || outcome.reason || 'فشل الطلب من كلا المصدرين' };
   }
+
+  const result = { isbn, ...outcome };
+  cache.set(isbn, result);
+  return result;
 }
 
 /**
@@ -1960,7 +2088,7 @@ async function processQueue(isbns) {
 
       try {
         // اجلب البيانات من API
-        const data = await fetchBookMetadata(isbn);
+        const data = await fetchBookMetadata(isbn, currentIndex);
         results[currentIndex] = data;
 
         if (data.found) {
@@ -2149,6 +2277,7 @@ function exportResults() {
   const exportData = results.map(r => ({
     'ISBN': r.isbn,
     'الحالة': r.found ? 'تم الجلب' : (r.duplicate ? 'مكرر' : 'فشل'),
+    'المصدر': r.source || '',
     'العنوان': r.title || '',
     'المؤلف': r.authors || '',
     'الناشر': r.publisher || '',
@@ -2157,6 +2286,7 @@ function exportResults() {
     'اللغة': r.language || '',
     'الأبعاد': r.dimensions || '',
     'التصنيف': r.categories || '',
+    'الوصف': r.description || '',
     'ملاحظة': r.reason || '',
   }));
 
@@ -2166,9 +2296,9 @@ function exportResults() {
 
   // تعيين عرض الأعمدة
   ws['!cols'] = [
-    { wch: 16 }, { wch: 12 }, { wch: 40 }, { wch: 25 },
+    { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 40 }, { wch: 25 },
     { wch: 25 }, { wch: 12 }, { wch: 12 }, { wch: 10 },
-    { wch: 15 }, { wch: 20 }, { wch: 30 }
+    { wch: 15 }, { wch: 20 }, { wch: 60 }, { wch: 30 }
   ];
 
   XLSX.utils.book_append_sheet(wb, ws, 'ISBN Results');
